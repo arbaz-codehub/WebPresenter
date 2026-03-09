@@ -5,7 +5,7 @@ import {
   Copy, Maximize, Move, Layers, MonitorPlay, Palette,
   PanelLeft, PanelRight, PanelLeftClose, PanelRightClose,
   Square, Circle, Shapes, List, TextQuote, Heading1, Heading2,
-  Globe, Download, Upload, Video
+  Globe, Download, Upload, Video, Link
 } from 'lucide-react';
 import localforage from 'localforage';
 
@@ -107,6 +107,7 @@ const ELEMENTS_MENU = [
   { category: 'Media', items: [
     { id: 'image', name: 'Image', icon: <ImageIcon size={14}/> },
     { id: 'video', name: 'Video', icon: <Video size={14}/> },
+    { id: 'url', name: 'Web Link', icon: <Link size={14}/> },
   ]},
   { category: 'Shapes', items: [
     { id: 'shape-rect', name: 'Rectangle', icon: <Square size={14}/> },
@@ -377,6 +378,25 @@ const getStandaloneScript = (themeJson, dataStr) => `
                       } 
                     })
                   );
+                } else if (el.type === 'url') {
+                  content = React.createElement('div', { className: "w-full h-full p-[2%] flex items-center justify-center" },
+                    el.urlMode === 'preview' ? (
+                      React.createElement('div', { className: "w-full h-full flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden border border-neutral-200" },
+                        React.createElement('div', { className: "flex-1 relative" },
+                          React.createElement('iframe', { src: el.content, title: "preview", className: "absolute inset-0 w-full h-full border-0 pointer-events-none" })
+                        ),
+                        React.createElement('div', { className: "w-full p-2 bg-neutral-100/90 text-center text-xs truncate border-t border-neutral-200 pointer-events-auto", style: { color: el.color } },
+                          React.createElement('a', { href: el.content, target: "_blank", rel: "noopener noreferrer", className: "hover:underline font-medium" }, el.linkText || el.content)
+                        )
+                      )
+                    ) : (
+                      React.createElement('a', { 
+                        href: el.content, target: "_blank", rel: "noopener noreferrer", 
+                        className: "w-full h-full whitespace-pre-wrap break-words pointer-events-auto flex items-center justify-center text-center hover:opacity-80 transition-opacity", 
+                        style: { textDecoration: el.textDecoration || 'underline', color: el.color } 
+                      }, el.linkText || el.content)
+                    )
+                  );
                 } else if (el.type === 'shape') {
                   let shapeContent;
                   if (el.shapeType === 'rect') shapeContent = React.createElement('div', { className: "w-full h-full shadow-2xl", style: { backgroundColor: el.color, borderRadius: '8px' } });
@@ -427,19 +447,28 @@ export default function App() {
   const [mode, setMode] = useState('editor'); // 'editor' | 'presenter'
   const [slides, setSlides] = useState([createNewSlide('luxury-black', 0)]);
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
-  const [selectedElementId, setSelectedElementId] = useState(null);
+  const [selectedElementIds, setSelectedElementIds] = useState([]);
+  const [selectionBox, setSelectionBox] = useState(null);
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [brandSettings, setBrandSettings] = useState({ logoUrl: '', websiteUrl: '', position: 'bottom-right' });
   const [isLoading, setIsLoading] = useState(true);
   const fileInputRef = useRef(null);
+  const canvasRef = useRef(null);
+  const historyRef = useRef([]);
+  const undoIndexRef = useRef(-1);
+  const isUndoAction = useRef(false);
 
   useEffect(() => {
     injectStyles();
     localforage.getItem('webpresent_data').then((data) => {
       if (data) {
-        if (data.slides) setSlides(data.slides);
+        if (data.slides) {
+            setSlides(data.slides);
+            historyRef.current = [JSON.parse(JSON.stringify(data.slides))];
+            undoIndexRef.current = 0;
+        }
         if (data.brandSettings) setBrandSettings(data.brandSettings);
       }
       setIsLoading(false);
@@ -450,7 +479,40 @@ export default function App() {
     if (!isLoading) {
       localforage.setItem('webpresent_data', { slides, brandSettings });
     }
+    if (isLoading || isUndoAction.current) {
+      if (isUndoAction.current) isUndoAction.current = false;
+      return;
+    }
+    if (undoIndexRef.current < historyRef.current.length - 1) {
+      historyRef.current = historyRef.current.slice(0, undoIndexRef.current + 1);
+    }
+    if (historyRef.current.length === 0 || JSON.stringify(historyRef.current[historyRef.current.length - 1]) !== JSON.stringify(slides)) {
+      historyRef.current.push(JSON.parse(JSON.stringify(slides)));
+      if (historyRef.current.length > 50) {
+        historyRef.current.shift();
+      } else {
+        undoIndexRef.current = historyRef.current.length - 1;
+      }
+    }
   }, [slides, brandSettings, isLoading]);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        const activeTag = document.activeElement?.tagName;
+        if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+        e.preventDefault();
+        if (undoIndexRef.current > 0) {
+          undoIndexRef.current -= 1;
+          isUndoAction.current = true;
+          setSlides(historyRef.current[undoIndexRef.current]);
+          setSelectedElementIds([]);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const clearData = () => {
     if (window.confirm("Are you sure you want to clear all saved presentation data and start fresh?")) {
@@ -461,7 +523,7 @@ export default function App() {
   };
 
   const currentSlide = slides[currentSlideIndex];
-  const selectedElement = currentSlide?.elements.find(e => e.id === selectedElementId);
+  const selectedElement = selectedElementIds.length === 1 ? currentSlide?.elements.find(e => e.id === selectedElementIds[0]) : null;
 
   if (isLoading) {
     return <div className="fixed inset-0 bg-black flex items-center justify-center text-white z-50">Loading Data...</div>;
@@ -472,7 +534,7 @@ export default function App() {
     const newSlide = createNewSlide(currentSlide.theme, templateIndex);
     setSlides([...slides, newSlide]);
     setCurrentSlideIndex(slides.length);
-    setSelectedElementId(null);
+    setSelectedElementIds([]);
   };
 
   const deleteSlide = (index) => {
@@ -480,7 +542,7 @@ export default function App() {
     const newSlides = slides.filter((_, i) => i !== index);
     setSlides(newSlides);
     setCurrentSlideIndex(Math.min(currentSlideIndex, newSlides.length - 1));
-    setSelectedElementId(null);
+    setSelectedElementIds([]);
   };
 
   const duplicateSlide = (index) => {
@@ -541,6 +603,9 @@ export default function App() {
       case 'video':
         newElement = { ...newElement, type: 'video', content: 'https://cdn.pixabay.com/vimeo/32828822/water-24651.mp4?width=640', objectFit: 'cover', fontSize: 2, fontWeight: '400', borderRadius: 8, autoPlay: true, loop: true, controls: false };
         break;
+      case 'url':
+        newElement = { ...newElement, type: 'url', content: 'https://example.com', urlMode: 'link', linkText: 'Click here', fontSize: 3, fontWeight: '500', color: '#3b82f6', textDecoration: 'underline' };
+        break;
       case 'shape-rect':
         newElement = { ...newElement, type: 'shape', shapeType: 'rect', color: defaultColor, fontSize: 2, fontWeight: '400', content: '' };
         break;
@@ -558,7 +623,7 @@ export default function App() {
     }
     
     updateSlide({ elements: [...currentSlide.elements, newElement] });
-    setSelectedElementId(newElement.id);
+    setSelectedElementIds([newElement.id]);
   };
 
   const updateElement = (id, updates) => {
@@ -574,9 +639,131 @@ export default function App() {
     });
   };
 
+  const updateMultipleElements = (updatesArray) => {
+    setSlides(prevSlides => {
+      const currentSlideRef = prevSlides[currentSlideIndex];
+      if (!currentSlideRef) return prevSlides;
+      const newElements = [...currentSlideRef.elements];
+      updatesArray.forEach(({id, updates}) => {
+        const idx = newElements.findIndex(e => e.id === id);
+        if (idx > -1) newElements[idx] = { ...newElements[idx], ...updates };
+      });
+      const newSlides = [...prevSlides];
+      newSlides[currentSlideIndex] = { ...currentSlideRef, elements: newElements };
+      return newSlides;
+    });
+  };
+
   const deleteElement = (id) => {
     updateSlide({ elements: currentSlide.elements.filter(e => e.id !== id) });
-    if (selectedElementId === id) setSelectedElementId(null);
+    setSelectedElementIds(prev => prev.filter(selectedId => selectedId !== id));
+  };
+
+  const deleteSelectedElements = () => {
+    updateSlide({ elements: currentSlide.elements.filter(e => !selectedElementIds.includes(e.id)) });
+    setSelectedElementIds([]);
+  };
+
+  const groupElements = () => {
+    if (selectedElementIds.length < 2) return;
+    const newGroupId = generateId();
+    const updates = selectedElementIds.map(id => ({ id, updates: { groupId: newGroupId } }));
+    updateMultipleElements(updates);
+  };
+
+  const ungroupElements = () => {
+    const elementsToUngroup = currentSlide.elements.filter(e => 
+      selectedElementIds.includes(e.id) || 
+      selectedElementIds.some(sid => {
+        const selEl = currentSlide.elements.find(x => x.id === sid);
+        return selEl?.groupId && e.groupId === selEl.groupId;
+      })
+    );
+    const updates = elementsToUngroup.map(e => ({ id: e.id, updates: { groupId: null } }));
+    updateMultipleElements(updates);
+    setSelectedElementIds(elementsToUngroup.map(e => e.id));
+  };
+
+  const handleCanvasMouseDown = (e) => {
+    if (e.target.closest('.group') || e.target.closest('.resize-handle')) return;
+    setSelectedElementIds([]);
+    
+    if (!canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+    
+    setSelectionBox({ x: startX, y: startY, w: 0, h: 0 });
+    
+    const onMouseMove = (moveEvent) => {
+      const currentX = moveEvent.clientX - rect.left;
+      const currentY = moveEvent.clientY - rect.top;
+      setSelectionBox({
+        x: Math.min(startX, currentX),
+        y: Math.min(startY, currentY),
+        w: Math.abs(currentX - startX),
+        h: Math.abs(currentY - startY)
+      });
+    };
+    
+    const onMouseUp = (upEvent) => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+      
+      const endX = upEvent.clientX - rect.left;
+      const endY = upEvent.clientY - rect.top;
+      
+      if (Math.abs(endX - startX) > 5 || Math.abs(endY - startY) > 5) {
+        const selLeft = Math.min(startX, endX) / rect.width * 100;
+        const selRight = Math.max(startX, endX) / rect.width * 100;
+        const selTop = Math.min(startY, endY) / rect.height * 100;
+        const selBottom = Math.max(startY, endY) / rect.height * 100;
+        
+        let newlySelectedIds = currentSlide.elements.filter(el => {
+          const elRight = el.x + el.width;
+          const elBottom = el.y + el.height;
+          return !(elRight < selLeft || el.x > selRight || elBottom < selTop || el.y > selBottom);
+        }).map(e => e.id);
+
+        // Expand selection to full groups implicitly
+        newlySelectedIds.forEach(id => {
+           const el = currentSlide.elements.find(e => e.id === id);
+           if (el?.groupId) {
+             const groupIds = currentSlide.elements.filter(e => e.groupId === el.groupId).map(e => e.id);
+             newlySelectedIds = [...newlySelectedIds, ...groupIds];
+           }
+        });
+
+        setSelectedElementIds([...new Set(newlySelectedIds)]);
+      }
+      setSelectionBox(null);
+    };
+    
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleElementSelect = (e, id) => {
+    e.stopPropagation();
+    const el = currentSlide.elements.find(e => e.id === id);
+    let idsToSelect = [id];
+    
+    if (el?.groupId) {
+      idsToSelect = currentSlide.elements.filter(x => x.groupId === el.groupId).map(x => x.id);
+    }
+    
+    if (e.shiftKey) {
+      const allSelected = idsToSelect.every(i => selectedElementIds.includes(i));
+      if (allSelected) {
+        setSelectedElementIds(prev => prev.filter(i => !idsToSelect.includes(i)));
+      } else {
+        setSelectedElementIds(prev => [...new Set([...prev, ...idsToSelect])]);
+      }
+    } else {
+      if (!selectedElementIds.includes(id)) {
+        setSelectedElementIds(idsToSelect);
+      }
+    }
   };
 
   const handleImageUpload = (e, callback) => {
@@ -640,7 +827,7 @@ export default function App() {
           if (data.slides) setSlides(data.slides);
           if (data.brandSettings) setBrandSettings(data.brandSettings);
           setCurrentSlideIndex(0);
-          setSelectedElementId(null);
+          setSelectedElementIds([]);
         } catch (err) {
           alert("Invalid presentation file format.");
         }
@@ -705,7 +892,7 @@ export default function App() {
             <div 
               key={slide.id}
               className={`relative group cursor-pointer rounded-lg border-2 overflow-hidden transition-all ${currentSlideIndex === idx ? 'border-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.3)]' : 'border-transparent hover:border-neutral-700'}`}
-              onClick={() => { setCurrentSlideIndex(idx); setSelectedElementId(null); }}
+              onClick={() => { setCurrentSlideIndex(idx); setSelectedElementIds([]); }}
             >
               <div className="absolute top-2 left-2 z-20 bg-black/60 px-2 py-0.5 rounded text-xs backdrop-blur-sm">
                 {idx + 1}
@@ -875,19 +1062,33 @@ export default function App() {
         {/* Canvas Area */}
         <div 
           className="flex-1 overflow-auto flex items-center justify-center p-4 md:p-8 relative"
-          onClick={() => setSelectedElementId(null)}
+          onMouseDown={handleCanvasMouseDown}
         >
           <div 
-            className="canvas-container slide-container w-full max-w-5xl shadow-2xl ring-1 ring-neutral-800 rounded-lg"
+            ref={canvasRef}
+            className="canvas-container slide-container w-full max-w-5xl shadow-2xl ring-1 ring-neutral-800 rounded-lg relative"
             style={{ background: THEMES[currentSlide.theme].background }}
           >
             {renderBrandingOverlay(THEMES[currentSlide.theme])}
+            
+            {selectionBox && (
+              <div 
+                className="absolute border border-blue-500 bg-blue-500/20 z-[100] pointer-events-none"
+                style={{
+                  left: selectionBox.x,
+                  top: selectionBox.y,
+                  width: selectionBox.w,
+                  height: selectionBox.h
+                }}
+              />
+            )}
+            
             {currentSlide.elements.map(el => (
               <DraggableElement
                 key={el.id}
                 element={el}
-                isSelected={selectedElementId === el.id}
-                onSelect={(e) => { e.stopPropagation(); setSelectedElementId(el.id); }}
+                isSelected={selectedElementIds.includes(el.id)}
+                onSelect={(e) => handleElementSelect(e, el.id)}
                 onChange={(updates) => updateElement(el.id, updates)}
                 theme={THEMES[currentSlide.theme]}
               />
@@ -909,7 +1110,32 @@ export default function App() {
         </div>
         
         <div className="p-5 space-y-6 overflow-y-auto hide-scrollbar min-w-[20rem] pb-24">
-          {!selectedElement ? (
+          {selectedElementIds.length > 1 ? (
+            (() => {
+              const selectedElementsObjs = currentSlide?.elements.filter(e => selectedElementIds.includes(e.id)) || [];
+              const isAllGrouped = selectedElementsObjs.every(e => e.groupId) && new Set(selectedElementsObjs.map(e => e.groupId)).size === 1;
+              return (
+                <div className="space-y-6 animate-fade-in">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xs font-bold text-neutral-500 uppercase tracking-widest flex items-center gap-2">
+                      <Layers size={14}/> Multiple Selected ({selectedElementIds.length})
+                    </h3>
+                    <button onClick={deleteSelectedElements} className="text-red-400 hover:text-red-300 p-1 bg-red-400/10 rounded">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                  <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 space-y-3 shadow-inner">
+                    {isAllGrouped ? (
+                      <div className="w-full text-sm font-medium bg-blue-600/20 text-blue-400 py-2 rounded text-center border border-blue-500/50 cursor-default">Grouped Together</div>
+                    ) : (
+                      <button onClick={groupElements} className="w-full text-sm font-medium bg-neutral-800 hover:bg-blue-600 hover:border-blue-500 py-2 rounded transition-colors border border-neutral-700">Group Elements</button>
+                    )}
+                    <button onClick={ungroupElements} disabled={!isAllGrouped} className={`w-full text-sm font-medium py-2 rounded transition-colors border border-neutral-700 ${isAllGrouped ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400' : 'bg-neutral-900 text-neutral-600 opacity-50 cursor-not-allowed'}`}>Ungroup Elements</button>
+                  </div>
+                </div>
+              );
+            })()
+          ) : !selectedElement ? (
             // Slide Properties
             <div className="space-y-6 animate-fade-in">
               <div>
@@ -978,6 +1204,7 @@ export default function App() {
                   {selectedElement.type === 'text' && <Type size={14}/>}
                   {selectedElement.type === 'image' && <ImageIcon size={14}/>} 
                   {selectedElement.type === 'video' && <Video size={14}/>} 
+                  {selectedElement.type === 'url' && <Link size={14}/>} 
                   {selectedElement.type === 'shape' && <Shapes size={14}/>} 
                   {selectedElement.type} Settings
                 </h3>
@@ -985,6 +1212,12 @@ export default function App() {
                   <Trash2 size={14} />
                 </button>
               </div>
+              
+              {selectedElement.groupId && (
+                <button onClick={ungroupElements} className="w-full text-xs font-semibold uppercase tracking-wider bg-neutral-800 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 py-2 rounded transition-colors border border-neutral-700 border-dashed">
+                  Ungroup Selection
+                </button>
+              )}
 
               {selectedElement.type === 'text' && (
                 <div className="space-y-4">
@@ -1178,6 +1411,71 @@ export default function App() {
                 </div>
               )}
 
+              {selectedElement.type === 'url' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-neutral-400 mb-1">URL / Link Destination</label>
+                    <input 
+                      type="text"
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                      value={selectedElement.content || ''}
+                      onChange={(e) => updateElement(selectedElement.id, { content: e.target.value })}
+                      placeholder="https://"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-neutral-400 mb-1">Display Mode</label>
+                    <select 
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                      value={selectedElement.urlMode || 'link'}
+                      onChange={(e) => updateElement(selectedElement.id, { urlMode: e.target.value })}
+                    >
+                      <option value="link">Text Link Only</option>
+                      <option value="preview">Live Preview (iFrame)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-neutral-400 mb-1">Link Display Text</label>
+                    <input 
+                      type="text"
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                      value={selectedElement.linkText || ''}
+                      onChange={(e) => updateElement(selectedElement.id, { linkText: e.target.value })}
+                      placeholder="Optional display text"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-neutral-400 mb-1">Font Family</label>
+                      <select 
+                        className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                        value={selectedElement.fontFamily || ''}
+                        onChange={(e) => updateElement(selectedElement.id, { fontFamily: e.target.value })}
+                      >
+                        {FONTS.map(font => <option key={font.name} value={font.family}>{font.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-neutral-400 mb-1">Text Color</label>
+                      <div className="flex bg-neutral-900 border border-neutral-700 rounded-md overflow-hidden">
+                        <input 
+                          type="color" 
+                          className="w-10 h-9 p-0 border-0 cursor-pointer shrink-0"
+                          value={selectedElement.color || '#3b82f6'}
+                          onChange={(e) => updateElement(selectedElement.id, { color: e.target.value })}
+                        />
+                        <input 
+                          type="text"
+                          className="w-full bg-transparent px-2 text-sm focus:outline-none uppercase"
+                          value={selectedElement.color || '#3b82f6'}
+                          onChange={(e) => updateElement(selectedElement.id, { color: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {selectedElement.type === 'shape' && (
                 <div className="space-y-4">
                   <div>
@@ -1284,6 +1582,20 @@ export default function App() {
                         {el.type === 'text' && <div className="w-full h-full whitespace-pre-wrap break-words px-[2%]" style={{ lineHeight: 1.2 }}>{el.content}</div>}
                         {el.type === 'video' && <video src={getDirectImageUrl(el.content)} autoPlay={el.autoPlay !== false} muted={el.autoPlay !== false} loop={el.loop} controls={el.controls} className="w-full h-full object-cover px-[2%]" style={{ borderRadius: el.borderRadius !== undefined ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) : '8px' }} />}
                         {el.type === 'image' && <img src={getDirectImageUrl(el.content)} className="w-full h-full object-cover px-[2%]" style={{ borderRadius: el.borderRadius !== undefined ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) : '8px' }} />}
+                        {el.type === 'url' && (
+                          <div className="w-full h-full px-[2%] flex items-center justify-center">
+                            {el.urlMode === 'preview' ? (
+                              <div className="w-full h-full flex flex-col bg-white rounded-xl shadow-xl overflow-hidden pointer-events-none">
+                                <div className="flex-1 relative"><iframe src={el.content} className="absolute inset-0 w-full h-full border-0" title="preview" /></div>
+                                <div className="w-full p-2 bg-neutral-100 text-center text-[10px] truncate border-t border-neutral-200" style={{ color: el.color }}>{el.linkText || el.content}</div>
+                              </div>
+                            ) : (
+                              <div className="w-full h-full whitespace-pre-wrap break-words pointer-events-none" style={{ textDecoration: el.textDecoration || 'underline', color: el.color }}>
+                                {el.linkText || el.content}
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {el.type === 'shape' && (
                           <div className="w-full h-full px-[2%] flex items-center justify-center">
                             {el.shapeType === 'rect' && <div className="w-full h-full" style={{ backgroundColor: el.color, borderRadius: '8px' }} />}
@@ -1326,13 +1638,61 @@ const DraggableElement = React.memo(function DraggableElement({ element, isSelec
     transientState.current = { ...element };
   }, [element]);
 
+  useEffect(() => {
+    const handleSyncStart = (e) => {
+      const { originId, groupId } = e.detail;
+      if (originId === element.id) return; // Ignore self
+      if (isSelected || (groupId && element.groupId === groupId)) {
+        transientState.current.syncStartX = transientState.current.x;
+        transientState.current.syncStartY = transientState.current.y;
+        setIsDragging(true); // Visual indicator
+      }
+    };
+
+    const handleSyncMove = (e) => {
+      const { originId, dx, dy, groupId } = e.detail;
+      if (originId === element.id) return; 
+      if (isSelected || (groupId && element.groupId === groupId)) {
+        const newX = Math.max(-100, Math.min(200, transientState.current.syncStartX + dx));
+        const newY = Math.max(-100, Math.min(200, transientState.current.syncStartY + dy));
+        transientState.current.x = newX;
+        transientState.current.y = newY;
+        if (elementRef.current) {
+          elementRef.current.style.left = `${newX}%`;
+          elementRef.current.style.top = `${newY}%`;
+        }
+      }
+    };
+
+    const handleSyncEnd = (e) => {
+      const { originId, groupId } = e.detail;
+      if (originId === element.id) return;
+      if (isSelected || (groupId && element.groupId === groupId)) {
+        setIsDragging(false);
+        onChange({ x: transientState.current.x, y: transientState.current.y });
+      }
+    };
+
+    window.addEventListener('sync-drag-start', handleSyncStart);
+    window.addEventListener('sync-drag-move', handleSyncMove);
+    window.addEventListener('sync-drag-end', handleSyncEnd);
+    return () => {
+      window.removeEventListener('sync-drag-start', handleSyncStart);
+      window.removeEventListener('sync-drag-move', handleSyncMove);
+      window.removeEventListener('sync-drag-end', handleSyncEnd);
+    };
+  }, [isSelected, element, onChange]);
+
   // High-performance drag implementation (bypasses React state during movement)
   const handleMouseDown = (e) => {
     if (e.target.classList.contains('resize-handle')) return;
-    e.stopPropagation();
+    
+    // Only invoke onSelect mechanism; allow e.stopPropagation if dealing with specific layers
     if (!isSelected) {
-      onSelect(e); // Only trigger expensive React re-select tree update if NOT already selected
+      onSelect(e);
     }
+    
+    e.stopPropagation();
     setIsDragging(true);
 
     const container = elementRef.current.parentElement;
@@ -1342,6 +1702,10 @@ const DraggableElement = React.memo(function DraggableElement({ element, isSelec
     const startY = e.clientY;
     const initialX = transientState.current.x;
     const initialY = transientState.current.y;
+
+    if (isSelected || element.groupId) {
+      window.dispatchEvent(new CustomEvent('sync-drag-start', { detail: { originId: element.id, groupId: element.groupId } }));
+    }
 
     const onMouseMove = (moveEvent) => {
       const dx = ((moveEvent.clientX - startX) / rect.width) * 100;
@@ -1358,6 +1722,10 @@ const DraggableElement = React.memo(function DraggableElement({ element, isSelec
         elementRef.current.style.left = `${newX}%`;
         elementRef.current.style.top = `${newY}%`;
       }
+      
+      if (isSelected || element.groupId) {
+        window.dispatchEvent(new CustomEvent('sync-drag-move', { detail: { originId: element.id, dx, dy, groupId: element.groupId } }));
+      }
     };
 
     const onMouseUp = () => {
@@ -1366,6 +1734,9 @@ const DraggableElement = React.memo(function DraggableElement({ element, isSelec
       document.removeEventListener('mouseup', onMouseUp);
       // Commit final position to React state once dropped
       onChange({ x: transientState.current.x, y: transientState.current.y });
+      if (isSelected || element.groupId) {
+        window.dispatchEvent(new CustomEvent('sync-drag-end', { detail: { originId: element.id, groupId: element.groupId } }));
+      }
     };
 
     document.addEventListener('mousemove', onMouseMove);
@@ -1487,6 +1858,20 @@ const DraggableElement = React.memo(function DraggableElement({ element, isSelec
                 : '8px' 
             }} 
           />
+        </div>
+      )}
+      {element.type === 'url' && (
+        <div className="w-full h-full p-[2%] flex items-center justify-center">
+          {element.urlMode === 'preview' ? (
+            <div className="w-full h-full flex flex-col bg-white rounded-xl shadow-xl overflow-hidden pointer-events-none">
+              <div className="flex-1 relative"><iframe src={element.content} className="absolute inset-0 w-full h-full border-0" title="preview" /></div>
+              <div className="w-full p-2 bg-neutral-100/90 text-center text-xs truncate border-t border-neutral-200" style={{ color: element.color, fontFamily: element.fontFamily }}>{element.linkText || element.content}</div>
+            </div>
+          ) : (
+            <div className="w-full h-full whitespace-pre-wrap break-words pointer-events-none flex items-center justify-center text-center" style={{ textDecoration: element.textDecoration || 'underline', color: element.color }}>
+              {element.linkText || element.content}
+            </div>
+          )}
         </div>
       )}
       {element.type === 'shape' && (
@@ -1644,6 +2029,22 @@ function Presenter({ slides, onExit, startIndex, brandSettings }) {
                               : '8px' 
                           }} 
                         />
+                      </div>
+                    )}
+                    {el.type === 'url' && (
+                      <div className="w-full h-full p-[2%] flex items-center justify-center">
+                        {el.urlMode === 'preview' ? (
+                          <div className="w-full h-full flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden">
+                            <div className="flex-1 relative pointer-events-none"><iframe src={el.content} className="absolute inset-0 w-full h-full border-0" title="preview" /></div>
+                            <div className="w-full p-2 bg-neutral-100/90 text-center text-sm truncate border-t border-neutral-200 pointer-events-auto" style={{ color: el.color }}>
+                              <a href={el.content} target="_blank" rel="noopener noreferrer" className="hover:underline font-medium">{el.linkText || el.content}</a>
+                            </div>
+                          </div>
+                        ) : (
+                          <a href={el.content} target="_blank" rel="noopener noreferrer" className="w-full h-full whitespace-pre-wrap break-words pointer-events-auto flex items-center justify-center text-center hover:opacity-80 transition-opacity" style={{ textDecoration: el.textDecoration || 'underline', color: el.color }}>
+                            {el.linkText || el.content}
+                          </a>
+                        )}
                       </div>
                     )}
                     {el.type === 'shape' && (
