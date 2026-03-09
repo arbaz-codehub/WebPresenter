@@ -5,8 +5,9 @@ import {
   Copy, Maximize, Move, Layers, MonitorPlay, Palette,
   PanelLeft, PanelRight, PanelLeftClose, PanelRightClose,
   Square, Circle, Shapes, List, TextQuote, Heading1, Heading2,
-  Globe, Download, Upload
+  Globe, Download, Upload, Video
 } from 'lucide-react';
+import localforage from 'localforage';
 
 // --- UTILITIES ---
 
@@ -105,6 +106,7 @@ const ELEMENTS_MENU = [
   ]},
   { category: 'Media', items: [
     { id: 'image', name: 'Image', icon: <ImageIcon size={14}/> },
+    { id: 'video', name: 'Video', icon: <Video size={14}/> },
   ]},
   { category: 'Shapes', items: [
     { id: 'shape-rect', name: 'Rectangle', icon: <Square size={14}/> },
@@ -344,6 +346,23 @@ const getStandaloneScript = (themeJson, dataStr) => `
                 let content;
                 if (el.type === 'text') {
                   content = React.createElement('div', { className: "w-full h-full whitespace-pre-wrap break-words p-[2%]", style: { lineHeight: 1.2 } }, el.content);
+                } else if (el.type === 'video') {
+                  content = React.createElement('div', { className: "w-full h-full p-[2%]" },
+                    React.createElement('video', { 
+                      src: getDirectImageUrl(el.content), 
+                      className: "w-full h-full shadow-2xl", 
+                      style: { 
+                        objectFit: el.objectFit || 'cover',
+                        borderRadius: el.borderRadius !== undefined 
+                          ? (el.borderRadius >= 50 ? el.borderRadius + '%' : el.borderRadius + 'px') 
+                          : '8px' 
+                      },
+                      autoPlay: el.autoPlay !== false,
+                      muted: el.autoPlay !== false,
+                      loop: el.loop,
+                      controls: el.controls
+                    })
+                  );
                 } else if (el.type === 'image') {
                   content = React.createElement('div', { className: "w-full h-full p-[2%]" },
                     React.createElement('img', { 
@@ -352,7 +371,9 @@ const getStandaloneScript = (themeJson, dataStr) => `
                       className: "w-full h-full shadow-2xl", 
                       style: { 
                         objectFit: el.objectFit || 'cover',
-                        borderRadius: el.borderRadius !== undefined ? el.borderRadius + 'px' : '8px' 
+                        borderRadius: el.borderRadius !== undefined 
+                          ? (el.borderRadius >= 50 ? el.borderRadius + '%' : el.borderRadius + 'px') 
+                          : '8px' 
                       } 
                     })
                   );
@@ -411,14 +432,40 @@ export default function App() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [brandSettings, setBrandSettings] = useState({ logoUrl: '', websiteUrl: '', position: 'bottom-right' });
+  const [isLoading, setIsLoading] = useState(true);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
     injectStyles();
+    localforage.getItem('webpresent_data').then((data) => {
+      if (data) {
+        if (data.slides) setSlides(data.slides);
+        if (data.brandSettings) setBrandSettings(data.brandSettings);
+      }
+      setIsLoading(false);
+    }).catch(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!isLoading) {
+      localforage.setItem('webpresent_data', { slides, brandSettings });
+    }
+  }, [slides, brandSettings, isLoading]);
+
+  const clearData = () => {
+    if (window.confirm("Are you sure you want to clear all saved presentation data and start fresh?")) {
+      localforage.removeItem('webpresent_data').then(() => {
+        window.location.reload();
+      });
+    }
+  };
 
   const currentSlide = slides[currentSlideIndex];
   const selectedElement = currentSlide?.elements.find(e => e.id === selectedElementId);
+
+  if (isLoading) {
+    return <div className="fixed inset-0 bg-black flex items-center justify-center text-white z-50">Loading Data...</div>;
+  }
 
   // --- ACTIONS ---
   const addSlide = (templateIndex = 0) => {
@@ -450,9 +497,12 @@ export default function App() {
   };
 
   const updateSlide = (updates) => {
-    const newSlides = [...slides];
-    newSlides[currentSlideIndex] = { ...newSlides[currentSlideIndex], ...updates };
-    setSlides(newSlides);
+    setSlides(prevSlides => {
+      const newSlides = [...prevSlides];
+      if (!newSlides[currentSlideIndex]) return prevSlides;
+      newSlides[currentSlideIndex] = { ...newSlides[currentSlideIndex], ...updates };
+      return newSlides;
+    });
   };
 
   const addElement = (elementType) => {
@@ -488,6 +538,9 @@ export default function App() {
       case 'image':
         newElement = { ...newElement, type: 'image', content: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&q=80', objectFit: 'cover', fontSize: 2, fontWeight: '400', borderRadius: 8 };
         break;
+      case 'video':
+        newElement = { ...newElement, type: 'video', content: 'https://cdn.pixabay.com/vimeo/32828822/water-24651.mp4?width=640', objectFit: 'cover', fontSize: 2, fontWeight: '400', borderRadius: 8, autoPlay: true, loop: true, controls: false };
+        break;
       case 'shape-rect':
         newElement = { ...newElement, type: 'shape', shapeType: 'rect', color: defaultColor, fontSize: 2, fontWeight: '400', content: '' };
         break;
@@ -509,10 +562,16 @@ export default function App() {
   };
 
   const updateElement = (id, updates) => {
-    const newElements = currentSlide.elements.map(el => 
-      el.id === id ? { ...el, ...updates } : el
-    );
-    updateSlide({ elements: newElements });
+    setSlides(prevSlides => {
+      const currentSlideRef = prevSlides[currentSlideIndex];
+      if (!currentSlideRef) return prevSlides;
+      const newElements = currentSlideRef.elements.map(el => 
+        el.id === id ? { ...el, ...updates } : el
+      );
+      const newSlides = [...prevSlides];
+      newSlides[currentSlideIndex] = { ...currentSlideRef, elements: newElements };
+      return newSlides;
+    });
   };
 
   const deleteElement = (id) => {
@@ -679,6 +738,19 @@ export default function App() {
                           {el.content}
                         </div>
                       )}
+                      {el.type === 'video' && (
+                        <video 
+                          src={getDirectImageUrl(el.content)} 
+                          autoPlay={el.autoPlay !== false} muted={el.autoPlay !== false} loop={el.loop} controls={el.controls}
+                          className="w-full h-full px-[2%]" 
+                          style={{ 
+                            objectFit: el.objectFit || 'cover',
+                            borderRadius: el.borderRadius !== undefined 
+                              ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) 
+                              : '8px' 
+                          }} 
+                        />
+                      )}
                       {el.type === 'image' && (
                         <img 
                           src={getDirectImageUrl(el.content)} 
@@ -686,7 +758,9 @@ export default function App() {
                           className="w-full h-full px-[2%]" 
                           style={{ 
                             objectFit: el.objectFit || 'cover',
-                            borderRadius: el.borderRadius !== undefined ? `${el.borderRadius}px` : '8px' 
+                            borderRadius: el.borderRadius !== undefined 
+                              ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) 
+                              : '8px' 
                           }} 
                         />
                       )}
@@ -741,6 +815,9 @@ export default function App() {
             </button>
             <button onClick={handleExport} className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-neutral-800 hover:bg-neutral-700 rounded-md transition-colors border border-neutral-700 whitespace-nowrap" title="Export HTML">
               <Download size={16} /> <span className="hidden sm:inline">Export</span>
+            </button>
+            <button onClick={clearData} className="flex items-center gap-2 px-3 py-1.5 text-xs md:text-sm bg-red-900/40 hover:bg-red-800 text-red-500 hover:text-white rounded-md transition-colors border border-red-800/50 whitespace-nowrap" title="Clear Saved Data">
+              <Trash2 size={16} /> <span className="hidden sm:inline">Clear Data</span>
             </button>
 
             <div className="w-px h-6 bg-neutral-700 mx-1 md:mx-2" />
@@ -900,6 +977,7 @@ export default function App() {
                 <h3 className="text-xs font-bold text-neutral-500 uppercase tracking-widest flex items-center gap-2">
                   {selectedElement.type === 'text' && <Type size={14}/>}
                   {selectedElement.type === 'image' && <ImageIcon size={14}/>} 
+                  {selectedElement.type === 'video' && <Video size={14}/>} 
                   {selectedElement.type === 'shape' && <Shapes size={14}/>} 
                   {selectedElement.type} Settings
                 </h3>
@@ -1021,10 +1099,10 @@ export default function App() {
                 </div>
               )}
 
-              {selectedElement.type === 'image' && (
+              {(selectedElement.type === 'image' || selectedElement.type === 'video') && (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs text-neutral-400 mb-1">Image (URL or Upload)</label>
+                    <label className="block text-xs text-neutral-400 mb-1">Media (URL or Upload)</label>
                     <div className="flex gap-2">
                       <input 
                         type="text" 
@@ -1033,15 +1111,32 @@ export default function App() {
                         onChange={(e) => updateElement(selectedElement.id, { content: e.target.value })}
                         placeholder="https://..."
                       />
-                      <label className="flex items-center justify-center px-3 bg-neutral-800 border border-neutral-700 rounded-md cursor-pointer hover:bg-neutral-700 transition-colors" title="Upload Local Image">
+                      <label className="flex items-center justify-center px-3 bg-neutral-800 border border-neutral-700 rounded-md cursor-pointer hover:bg-neutral-700 transition-colors" title="Upload Local File">
                         <Upload size={16} className="text-neutral-400" />
-                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageUpload(e, (base64) => updateElement(selectedElement.id, { content: base64 }))} />
+                        <input type="file" accept={selectedElement.type === 'image' ? "image/*" : "video/*"} className="hidden" onChange={(e) => handleImageUpload(e, (base64) => updateElement(selectedElement.id, { content: base64 }))} />
                       </label>
                     </div>
                   </div>
                   
+                  {selectedElement.type === 'video' && (
+                    <div className="grid grid-cols-3 gap-2 bg-neutral-900 p-2 rounded-md border border-neutral-700">
+                      <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+                        <input type="checkbox" checked={selectedElement.autoPlay !== false} onChange={(e) => updateElement(selectedElement.id, { autoPlay: e.target.checked })} />
+                        Autoplay
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+                        <input type="checkbox" checked={selectedElement.loop !== false} onChange={(e) => updateElement(selectedElement.id, { loop: e.target.checked })} />
+                        Loop
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-neutral-300 cursor-pointer">
+                        <input type="checkbox" checked={selectedElement.controls || false} onChange={(e) => updateElement(selectedElement.id, { controls: e.target.checked })} />
+                        Controls
+                      </label>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-xs text-neutral-400 mb-1">Image Fit</label>
+                    <label className="block text-xs text-neutral-400 mb-1">Media Fit</label>
                     <select 
                       className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
                       value={selectedElement.objectFit || 'cover'}
@@ -1056,20 +1151,29 @@ export default function App() {
                   <div>
                     <label className="block text-xs text-neutral-400 mb-1">Quick Aspect Ratio Lock</label>
                     <div className="flex bg-neutral-900 rounded-md border border-neutral-700 overflow-hidden">
-                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors">1:1</button>
-                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width * (9/16) })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors border-l border-neutral-700">16:9</button>
-                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width * (3/4) })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors border-l border-neutral-700">4:3</button>
+                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width * (16/9) })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors">1:1</button>
+                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors border-l border-neutral-700">16:9</button>
+                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width * (16/9) * (3/4) })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors border-l border-neutral-700">4:3</button>
+                      <button onClick={() => updateElement(selectedElement.id, { height: selectedElement.width * (16/9) * (16/9) })} className="flex-1 py-1.5 text-xs hover:bg-neutral-800 transition-colors border-l border-neutral-700">9:16</button>
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs text-neutral-400 mb-1">Border Radius (px)</label>
-                    <input 
-                      type="number" min="0" max="200"
-                      className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
-                      value={selectedElement.borderRadius !== undefined ? selectedElement.borderRadius : 8}
-                      onChange={(e) => updateElement(selectedElement.id, { borderRadius: Number(e.target.value) })}
-                    />
+                    <label className="block text-xs text-neutral-400 mb-1">Border Radius</label>
+                    <div className="flex gap-2 items-center">
+			                <input 
+			                  type="number" min="0" max="200"
+			                  className="w-full bg-neutral-900 border border-neutral-700 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+			                  value={selectedElement.borderRadius !== undefined ? selectedElement.borderRadius : 8}
+			                  onChange={(e) => updateElement(selectedElement.id, { borderRadius: Number(e.target.value) })}
+			                />
+			                <button 
+			                  onClick={() => updateElement(selectedElement.id, { borderRadius: 50 })}
+			                  className={`px-3 py-2 text-xs rounded-md border transition-colors whitespace-nowrap ${selectedElement.borderRadius >= 50 ? 'bg-blue-600 border-blue-600 text-white' : 'bg-neutral-800 border-neutral-700 hover:bg-neutral-700'}`}
+			                >
+			                  50% Circle
+			                </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1178,7 +1282,8 @@ export default function App() {
                         }}
                       >
                         {el.type === 'text' && <div className="w-full h-full whitespace-pre-wrap break-words px-[2%]" style={{ lineHeight: 1.2 }}>{el.content}</div>}
-                        {el.type === 'image' && <img src={getDirectImageUrl(el.content)} className="w-full h-full object-cover px-[2%]" style={{ borderRadius: el.borderRadius !== undefined ? `${el.borderRadius}px` : '8px' }} />}
+                        {el.type === 'video' && <video src={getDirectImageUrl(el.content)} autoPlay={el.autoPlay !== false} muted={el.autoPlay !== false} loop={el.loop} controls={el.controls} className="w-full h-full object-cover px-[2%]" style={{ borderRadius: el.borderRadius !== undefined ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) : '8px' }} />}
+                        {el.type === 'image' && <img src={getDirectImageUrl(el.content)} className="w-full h-full object-cover px-[2%]" style={{ borderRadius: el.borderRadius !== undefined ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) : '8px' }} />}
                         {el.type === 'shape' && (
                           <div className="w-full h-full px-[2%] flex items-center justify-center">
                             {el.shapeType === 'rect' && <div className="w-full h-full" style={{ backgroundColor: el.color, borderRadius: '8px' }} />}
@@ -1210,7 +1315,7 @@ export default function App() {
 }
 
 // --- DRAGGABLE ELEMENT COMPONENT ---
-function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
+const DraggableElement = React.memo(function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
   const elementRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
@@ -1225,7 +1330,9 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
   const handleMouseDown = (e) => {
     if (e.target.classList.contains('resize-handle')) return;
     e.stopPropagation();
-    onSelect(e);
+    if (!isSelected) {
+      onSelect(e); // Only trigger expensive React re-select tree update if NOT already selected
+    }
     setIsDragging(true);
 
     const container = elementRef.current.parentElement;
@@ -1240,8 +1347,8 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
       const dx = ((moveEvent.clientX - startX) / rect.width) * 100;
       const dy = ((moveEvent.clientY - startY) / rect.height) * 100;
       
-      const newX = Math.max(0, Math.min(100 - transientState.current.width, initialX + dx));
-      const newY = Math.max(0, Math.min(100 - transientState.current.height, initialY + dy));
+      const newX = Math.max(-100, Math.min(200, initialX + dx));
+      const newY = Math.max(-100, Math.min(200, initialY + dy));
       
       transientState.current.x = newX;
       transientState.current.y = newY;
@@ -1281,8 +1388,8 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
       const dx = ((moveEvent.clientX - startX) / rect.width) * 100;
       const dy = ((moveEvent.clientY - startY) / rect.height) * 100;
       
-      const newWidth = Math.min(100 - transientState.current.x, Math.max(5, initialW + dx));
-      const newHeight = Math.min(100 - transientState.current.y, Math.max(5, initialH + dy));
+      const newWidth = Math.max(5, initialW + dx);
+      const newHeight = Math.max(5, initialH + dy);
       
       transientState.current.width = newWidth;
       transientState.current.height = newHeight;
@@ -1352,6 +1459,21 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
           {element.content}
         </div>
       )}
+      {element.type === 'video' && (
+        <div className="w-full h-full p-[2%]">
+          <video 
+            src={getDirectImageUrl(element.content)} 
+            autoPlay={element.autoPlay !== false} muted={element.autoPlay !== false} loop={element.loop} controls={element.controls}
+            className={`w-full h-full shadow-xl ${element.controls ? 'pointer-events-auto' : 'pointer-events-none'}`}
+            style={{ 
+              objectFit: element.objectFit || 'cover',
+              borderRadius: element.borderRadius !== undefined 
+                ? (element.borderRadius >= 50 ? `${element.borderRadius}%` : `${element.borderRadius}px`)
+                : '8px' 
+            }} 
+          />
+        </div>
+      )}
       {element.type === 'image' && (
         <div className="w-full h-full p-[2%]">
           <img 
@@ -1360,7 +1482,9 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
             className="w-full h-full pointer-events-none shadow-xl" 
             style={{ 
               objectFit: element.objectFit || 'cover',
-              borderRadius: element.borderRadius !== undefined ? `${element.borderRadius}px` : '8px' 
+              borderRadius: element.borderRadius !== undefined 
+                ? (element.borderRadius >= 50 ? `${element.borderRadius}%` : `${element.borderRadius}px`)
+                : '8px' 
             }} 
           />
         </div>
@@ -1387,7 +1511,11 @@ function DraggableElement({ element, isSelected, onSelect, onChange, theme }) {
       )}
     </div>
   );
-}
+}, (prevProps, nextProps) => {
+  return prevProps.isSelected === nextProps.isSelected && 
+         prevProps.element === nextProps.element && 
+         prevProps.theme.color === nextProps.theme.color;
+});
 
 // --- PRESENTER COMPONENT (HTML EXPORT EQUIVALENT) ---
 // This acts as the final generated HTML website view
@@ -1488,6 +1616,21 @@ function Presenter({ slides, onExit, startIndex, brandSettings }) {
                         {el.content}
                       </div>
                     )}
+                    {el.type === 'video' && (
+                      <div className="w-full h-full p-[2%]">
+                        <video 
+                          src={getDirectImageUrl(el.content)} 
+                          autoPlay={el.autoPlay !== false} muted={el.autoPlay !== false} loop={el.loop} controls={el.controls}
+                          className="w-full h-full shadow-2xl" 
+                          style={{ 
+                            objectFit: el.objectFit || 'cover',
+                            borderRadius: el.borderRadius !== undefined 
+                              ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) 
+                              : '8px' 
+                          }} 
+                        />
+                      </div>
+                    )}
                     {el.type === 'image' && (
                       <div className="w-full h-full p-[2%]">
                         <img 
@@ -1496,7 +1639,9 @@ function Presenter({ slides, onExit, startIndex, brandSettings }) {
                           className="w-full h-full shadow-2xl" 
                           style={{ 
                             objectFit: el.objectFit || 'cover',
-                            borderRadius: el.borderRadius !== undefined ? `${el.borderRadius}px` : '8px' 
+                            borderRadius: el.borderRadius !== undefined 
+                              ? (el.borderRadius >= 50 ? `${el.borderRadius}%` : `${el.borderRadius}px`) 
+                              : '8px' 
                           }} 
                         />
                       </div>
